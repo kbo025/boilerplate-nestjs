@@ -1,0 +1,86 @@
+name: CI:CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-central1
+  SERVICE_NAME: ntalks-api
+  REPO_NAME: ntalks-repo
+  IMAGE_NAME: ntalks-api
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 🔄 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🟢 Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '22'
+
+    - name: 📦 Install dependencies
+      run: npm install
+
+    - name: 🧹 Run linter
+      run: npm run lint
+
+    - name: 🧪 Run tests
+      run: npm test
+
+    - name: 🐳 Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        docker-compose --version
+
+    - name: 🐳 Build Docker image
+      run: docker-compose build --no-cache
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    # Run this job only if the pull request was merged
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged)
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 'Authenticate to Google Cloud'
+        id: 'auth'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 'Use Docker login to authenticate to Artifact Registry'
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      - name: Build and Push Docker Image to Artifact Registry
+        run: |
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest .
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest \
+            --platform managed \
+            --region ${{ env.REGION }} \
+            --allow-unauthenticated
