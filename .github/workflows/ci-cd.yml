@@ -18,7 +18,42 @@ env:
   IMAGE_NAME: ntalks-api
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '22'
+      - name: Cache node modules
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - run: npm install
+      - run: npm run lint 
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '22'
+      - name: Cache node modules
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - run: npm install
+      - run: npm test
+
   build:
+    needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
     - name: 🔄 Checkout code
@@ -29,23 +64,28 @@ jobs:
       with:
         node-version: '22'
 
+    - name: Cache node modules
+      uses: actions/cache@v3
+      with:
+        path: node_modules
+        key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
+
     - name: 📦 Install dependencies
       run: npm install
 
-    - name: 🧹 Run linter
-      run: npm run lint
+    # - name: 🐳 Install Docker Compose
+    #   run: |
+    #     sudo curl -L "https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    #     sudo chmod +x /usr/local/bin/docker-compose
+    #     docker-compose --version
 
-    - name: 🧪 Run tests
-      run: npm test
-
-    - name: 🐳 Install Docker Compose
-      run: |
-        sudo curl -L "https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        sudo chmod +x /usr/local/bin/docker-compose
-        docker-compose --version
+    # - name: 🐳 Build Docker image
+    #   run: docker-compose build --no-cache
 
     - name: 🐳 Build Docker image
-      run: docker-compose build --no-cache
+      run: docker build -t ${{ env.IMAGE_NAME }} .
 
   deploy:
     needs: build
