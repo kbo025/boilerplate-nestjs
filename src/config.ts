@@ -10,9 +10,9 @@ export const enviroments = {
 export const config = registerAs('config', () => {
   return {
     pg: {
-      name: process.env.POSTGRES_NAME,
+      name: process.env.POSTGRES_DB,
       user: process.env.POSTGRES_USER,
-      pass: process.env.POSTGRES_PASS,
+      pass: process.env.POSTGRES_PASSWORD,
       port: process.env.POSTGRES_PORT,
       host: process.env.POSTGRES_HOST,
     },
@@ -29,11 +29,11 @@ export const config = registerAs('config', () => {
 
 export const configSchema = Joi.object({
   API_KEY: Joi.number().required(),
-  POSTGRES_NAME: Joi.string().required(),
+  POSTGRES_DB: Joi.string().required(),
   POSTGRES_USER: Joi.string().required(),
-  POSTGRES_PASS: Joi.string().required(),
+  POSTGRES_PASSWORD: Joi.string().required(),
   POSTGRES_PORT: Joi.number().required(),
-  POSTGRES_HOST: Joi.string().hostname().required(),
+  POSTGRES_HOST: Joi.string().required(),
   JWT_SECRET: Joi.string().required(),
   JWT_EXPIRE_IN: Joi.string().required(),
   SUPERADMIN_ROLE: Joi.string().required(),

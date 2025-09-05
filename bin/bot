@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+
+##
+## A Command Line utility to interact with project CLI
+##
+## This code is based on https://github.com/laravel/sail
+##
+
+UNAMEOUT="$(uname -s)"
+
+# Verify operating system is supported...
+case "${UNAMEOUT}" in
+Linux*) MACHINE=linux ;;
+Darwin*) MACHINE=mac ;;
+*) MACHINE="UNKNOWN" ;;
+esac
+
+if [ "$MACHINE" == "UNKNOWN" ]; then
+  echo "Unsupported operating system [$(uname -s)]. Bot supports macOS, Linux, and Windows (WSL2)." >&2
+
+  exit 1
+fi
+
+# Determine if stdout is a terminal...
+if test -t 1; then
+  # Determine if colors are supported...
+  ncolors=$(tput colors)
+
+  if test -n "$ncolors" && test "$ncolors" -ge 8; then
+    BOLD="$(tput bold)"
+    YELLOW="$(tput setaf 3)"
+    GREEN="$(tput setaf 2)"
+    NC="$(tput sgr0)"
+  fi
+fi
+
+# Function that prints the available commands...
+function display_help {
+  echo "On2 Bot"
+  echo
+  echo "${YELLOW}Usage:${NC}" >&2
+  echo "  bot COMMAND [options] [arguments]"
+  echo
+  echo "Unknown commands are passed to the docker compose binary."
+  echo
+  echo "${YELLOW}Special Commands:${NC}"
+  echo "  ${GREEN}bot install${NC}   Run Yarn install using own container"
+  echo "  ${GREEN}bot generate${NC}  Alias for 'yarn prisma generate' using own container"
+  echo "  ${GREEN}bot migrate${NC}   Alias for 'yarn prisma:migrate' using own container"
+  echo "  ${GREEN}bot run${NC}       Alias for 'docker compose run node <your command>'"
+  echo "  ${GREEN}bot dev${NC}       Alias for 'yarn start:dev' using own container"
+  echo "  ${GREEN}bot db${NC}        Alias for 'yarn prisma:db' using own container"
+  echo "  ${GREEN}bot psql${NC}      Run psql using db container"
+  echo
+  echo "${YELLOW}docker compose Commands:${NC}"
+  echo "  ${GREEN}bot up${NC}        Start the container and application"
+  echo "  ${GREEN}bot up -d${NC}     Start the container and application in the background"
+  echo "  ${GREEN}bot up --profile debug${NC}  Starts the container and application, prisma studio and dbgate"
+  echo "  ${GREEN}bot stop${NC}      Stop the container and application"
+  echo "  ${GREEN}bot down${NC}      Stop and remove the container application"
+  echo "  ${GREEN}bot restart${NC}   Restart the application"
+  echo "  ${GREEN}bot ps${NC}        Display the status of all containers"
+  echo "  ${GREEN}bot logs -f${NC}   Display and listen for containers logs"
+  echo
+  echo "${YELLOW}Node Commands:${NC}"
+  echo "  ${GREEN}bot node ...${NC}  Run a Node command"
+  echo "  ${GREEN}bot node --version${NC}"
+  echo
+  echo "${YELLOW}Yarn Commands:${NC}"
+  echo "  ${GREEN}bot yarn ...${NC}             Run a Yarn command"
+  echo "  ${GREEN}bot yarn start:dev${NC}       Start Nest.js server in dev mode"
+  echo "  ${GREEN}bot yarn prisma generate${NC} Run Prisma Generate"
+  echo "  ${GREEN}bot yarn prisma:migrate${NC}  Run Prisma migrate"
+  echo
+  echo "${YELLOW}Running Tests:${NC}"
+  echo "  ${GREEN}bot test${NC}      Run the Jest tests via Yarn"
+  echo "  ${GREEN}bot lint ...${NC}  Run the linters"
+  echo
+  echo "${YELLOW}Container CLI:${NC}"
+  echo "  ${GREEN}bot shell${NC}     Start a shell session within the application container"
+
+  exit 1
+}
+
+# Proxy the "help" command...
+if [ $# -gt 0 ]; then
+  if [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "-help" ] || [ "$1" == "--help" ]; then
+    display_help
+  fi
+else
+  display_help
+fi
+
+# Function that outputs bot is not running...
+function bot_is_not_running {
+  echo "${BOLD}bot is not running.${NC}" >&2
+  echo "" >&2
+  echo "${BOLD}You may bot using the following commands:${NC} './bin/bot up' or './bin/bot up -d'" >&2
+
+  exit 1
+}
+
+function normalize_dir() {
+  (cd "${1}" && echo "$(pwd -P)")
+}
+
+APP_SERVICE="api"
+DB_SERVICE="postgres"
+BIN_PATH=$(normalize_dir "$(dirname "${0}")")
+WORKING_DIR=$(normalize_dir "${BIN_PATH}/..")
+DOCKER_COMPOSE=(docker compose)
+DOCKER_COMPOSE+=(--project-directory "${WORKING_DIR}")
+EXEC="yes"
+
+# Ensure that Docker is running...
+if ! docker info >/dev/null 2>&1; then
+  echo "${BOLD}Docker is not running.${NC}" >&2
+
+  exit 1
+fi
+
+# Load env vars
+"source" "${WORKING_DIR}/.dev.env"
+
+# Determine if Bot is currently up...
+if "${DOCKER_COMPOSE[@]}" ps "$APP_SERVICE" 2>&1 | grep 'Exit\|exited'; then
+  echo "${BOLD}Shutting down old Bot processes...${NC}" >&2
+
+  "${DOCKER_COMPOSE[@]}" down >/dev/null 2>&1
+
+  EXEC="no"
+elif [ -z "$("${DOCKER_COMPOSE[@]}" ps -q)" ]; then
+  EXEC="no"
+fi
+
+ARGS=()
+
+INTERNAL_COMMANDS="node npm npx yarn test lint shell bash"
+RUN_COMMANDS="lint test"
+if [ "$EXEC" == "no" ] && [[ "$INTERNAL_COMMANDS" =~ $1 ]]; then
+  bot_is_not_running
+fi
+
+RUN="run --rm"
+case "$1" in
+# Proxy command to "docker compose run node"...
+"run")
+  shift 1
+  ARGS+=($RUN)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" "$@")
+  ;;
+
+# Proxy command to "yarn" binary with a single-run application container...
+"install")
+  shift 1
+  ARGS+=($RUN)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn install "$@")
+  ;;
+
+# Proxy the "generate" command to the "yarn prisma generate" with a single-run application container...
+"generate")
+  shift 1
+  ARGS+=($RUN)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn prisma generate "$@")
+  ;;
+
+# Proxy the "migrate" command to the "yarn prisma:migrate" with a single-run application container...
+"migrate")
+  shift 1
+  ARGS+=($RUN)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn prisma:migrate "$@")
+  ;;
+
+# Proxy the "db" command to the "yarn prisma:db" with a single-run application container
+"db")
+  shift 1
+  ARGS+=($RUN)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn prisma:db "$@")
+  ;;
+
+# Proxy the "db" command to the "yarn prisma:db" with a single-run application container
+"psql")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=(-e POSTGRES_PASSWD="$PG_PASSWORD" "$DB_SERVICE" psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DATABASE" "$@")
+  ;;
+
+# Proxy command to "yarn" binary with a single-run application container...
+"dev")
+  shift 1
+  ARGS+=($RUN)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn start:dev "$@")
+  ;;
+
+# Proxy Node commands to the "node" binary on the application container...
+"node")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" node "$@")
+  ;;
+
+# Proxy NPM commands to the "npm" binary on the application container...
+"npm")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" npm "$@")
+  ;;
+
+# Proxy NPX commands to the "npx" binary on the application container...
+"npx")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" npx "$@")
+  ;;
+
+# Proxy YARN commands to the "yarn" binary on the application container...
+"yarn")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn "$@")
+  ;;
+
+# Proxy the "test" command to the "yarn test" Jest command...
+"test")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn test "$@")
+  ;;
+
+# Proxy the "lint" command to the "yarn lint" Lint command...
+"lint")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn lint "$@")
+  ;;
+
+# Initiate a Bash shell within the application container...
+"shell" | "bash")
+  shift 1
+  ARGS+=(exec)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" bash "$@")
+  ;;
+
+"debug")
+  shift 1
+  ARGS+=($RUN)
+  [ ! -t 0 ] && ARGS+=(-T)
+  ARGS+=("$APP_SERVICE" yarn start:debug "$@")
+  ;;
+# Pass unknown commands to the "docker compose" binary...
+*)
+  ARGS+=("$@")
+  ;;
+esac
+
+# Run Docker Compose with the defined arguments...
+"${DOCKER_COMPOSE[@]}" "${ARGS[@]}"

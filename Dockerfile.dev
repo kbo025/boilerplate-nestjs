@@ -9,6 +9,11 @@ RUN npm install
 
 COPY . .
 
+COPY prisma ./prisma
+
+# 👇 Esto es clave
+RUN npx prisma generate
+
 # Instala herramientas útiles para desarrollo
 RUN npm install -g @nestjs/cli ts-node-dev
 
