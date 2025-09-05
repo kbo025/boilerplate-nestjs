@@ -1,6 +1,7 @@
 name: CI Pull Request Validation
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
