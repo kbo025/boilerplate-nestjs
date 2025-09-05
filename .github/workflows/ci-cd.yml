@@ -75,20 +75,97 @@ jobs:
     - name: 📦 Install dependencies
       run: npm install
 
-    # - name: 🐳 Install Docker Compose
-    #   run: |
-    #     sudo curl -L "https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    #     sudo chmod +x /usr/local/bin/docker-compose
-    #     docker-compose --version
+    #- name: 🐳 Build Docker image
+    #  run: docker build -t ${{ env.IMAGE_NAME }} .
 
-    # - name: 🐳 Build Docker image
-    #   run: docker-compose build --no-cache
+    - name: Build and Push Docker Image
+      run: |
+        docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest .
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest
 
-    - name: 🐳 Build Docker image
-      run: docker build -t ${{ env.IMAGE_NAME }} .
+  secrets:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 'Create or Update Secret from .env'
+        run: |
+          SECRET_NAME=ntalks-env
+          ENV_CONTENT=$(cat .env | base64)
+
+          # Check if secret exists
+          if gcloud secrets describe $SECRET_NAME --project=${{ env.PROJECT_ID }} >/dev/null 2>&1; then
+            echo "Updating secret..."
+            echo $ENV_CONTENT | base64 --decode | gcloud secrets versions add $SECRET_NAME --data-file=-
+          else
+            echo "Creating secret..."
+            echo $ENV_CONTENT | base64 --decode | gcloud secrets create $SECRET_NAME --data-file=- --replication-policy="automatic"
+          fi
+
+  migrate:
+    needs: [build, secrets]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 'Install Node.js'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      # - name: Start Cloud SQL Proxy
+      #   uses: ahmadnassri/action-google-cloud-sql-proxy@v1
+      #   with:
+      #     key: ${{ secrets.GCP_SA_KEY }}
+      #     connection: ${{ secrets.CLOUD_SQL_CONNECTION_NAME }} # TODO: add on secrets of github actions
+      #     port: 5432
+
+      # probar esto primero
+      - name: Write credentials to file
+        run: echo '${{ secrets.GCP_SA_KEY }}' > key.json
+
+      - name: Start Cloud SQL Proxy manually
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+          ./cloud_sql_proxy -instances=${{ secrets.CLOUD_SQL_CONNECTION_NAME }}=tcp:5432 -credential_file=key.json &
+
+
+      - name: Run Prisma Migrations
+        env:
+          DATABASE_URL: "postgresql://user:password@127.0.0.1:5432/dbname?schema=public" # TODO: add on secrets of github actions
+        run: |
+          npx prisma migrate deploy
+          npx prisma generate
 
   deploy:
-    needs: build
+    needs: [build, secrets, migrate]
     runs-on: ubuntu-latest
     
     # Run this job only if the pull request was merged
@@ -112,10 +189,10 @@ jobs:
       - name: 'Use Docker login to authenticate to Artifact Registry'
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
-      - name: Build and Push Docker Image to Artifact Registry
-        run: |
-          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest .
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest
+      # - name: Build and Push Docker Image to Artifact Registry
+      #   run: |
+      #     docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest .
+      #     docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Deploy to Cloud Run
         run: |
@@ -123,4 +200,6 @@ jobs:
             --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest \
             --platform managed \
             --region ${{ env.REGION }} \
-            --allow-unauthenticated
+            --allow-unauthenticated \
+            --add-cloudsql-instances=${{ secrets.CLOUD_SQL_CONNECTION_NAME }} \
+            --update-secrets .env=ntalks-env:latest

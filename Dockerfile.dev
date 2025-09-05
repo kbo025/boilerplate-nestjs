@@ -1,0 +1,22 @@
+# Etapa 1: Desarrollo y compilación
+FROM node:22-alpine AS development
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+COPY prisma ./prisma
+
+# 👇 Esto es clave
+RUN npx prisma generate
+
+# Instala herramientas útiles para desarrollo
+RUN npm install -g @nestjs/cli ts-node-dev
+
+CMD ["ts-node-dev", "--respawn", "--transpile-only", "src/main.ts"]
+
+EXPOSE 3000
